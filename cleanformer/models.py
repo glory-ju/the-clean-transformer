@@ -9,6 +9,7 @@ class Transformer(LightningModule):
                  pad_token_id: int, heads: int, depth: int,
                  dropout: float, lr: float):  # noqa
         super().__init__()
+        # self.hparams 이라고 하는 딕셔너리에 모든 하이퍼 파라미터를 저장
         self.save_hyperparameters()
         # TODO: implement transformer
         # 학습을 해야하는 레이어? : 임베딩 테이블, 인코더, 디코더 이 3가지를 학습해야 함.
@@ -55,6 +56,44 @@ class Transformer(LightningModule):
         return {
             "loss": loss
         }
+
+    # auto-regressive inference
+    # learn -> issue_2
+    # issue_2 -> merge -> learn
+    def predict(self, X: torch.Tensor) -> torch.Tensor:
+        """
+        param X (N, 2, 2, L)
+        return label_ids (N, L)
+        """
+        # encoder 입력
+        src_ids, src_key_padding_mask = X[:, 0, 0], X[:, 0, 1]
+        # decoder 입력
+        tgt_ids, tgt_key_padding_mask = X[:, 1, 0], X[:, 1, 1]
+
+        for time in range(0, self.hparams['max_length']-1):  # 0 -> L - 2
+            # --------- #
+            # ... ( N, L, H)
+            hidden = self.forward(src_ids, tgt_ids,
+                                  src_key_padding_mask, tgt_key_padding_mask)  # (N, L, H)
+            cls = self.token_embeddings.weight  # (|V|, H)
+            # 행렬 곱을 해야한다.
+            logits = torch.einsum("nlh, vh-> nlv", hidden, cls)  # ... -> (N 0th, L 1st, V 2nd)
+            # 가장 로짓값이 높은 인덱스를 바로 다음 토큰으로 지정 -> greedy decoding.
+            # I walked the ... (dog) (cat)
+            # e.g. beam search
+            ids = torch.argmax(logits, dim=2)  # (N, L, V) -> (N, L)
+            # [BOS] 다음에 와야 하는 단어의 아이디
+            next_ids = ids[:, time]  # (N, L) -> (N,)
+            # 다음 시간대의 토큰을 예측된 토큰으로 갈음
+            # time = L - 1
+            # time + 1 = L (존재하지 않음), 그래서 0 ~ L - 1로 두면 index out of range
+            tgt_ids[:, time + 1] = next_ids
+            # 다음 시간대의 토큰은 더이상 패딩 토큰이 아니므로, 마스크를 열어주기.
+            tgt_key_padding_mask[:, time + 1] = 0
+            # --------- #
+
+        label_ids = tgt_ids
+        return label_ids
 
 
 
